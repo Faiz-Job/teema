@@ -1,67 +1,59 @@
-import requests
-from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
 import pandas as pd
 import time
 
 def scrape_teema():
-    url = "https://b2b.teema.org.tw/CompanyList.aspx"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Referer": url
-    }
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
     
-    session = requests.Session()
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
     all_companies = []
 
     try:
-        # 1. 抓取第一頁
-        print("正在抓取第 1 頁...")
-        res = session.get(url, headers=headers, timeout=20)
-        soup = BeautifulSoup(res.text, 'html.parser')
+        url = "https://b2b.teema.org.tw/CompanyList.aspx"
+        driver.get(url)
+        wait = WebDriverWait(driver, 20)
 
-        def extract_names(s):
-            # 根據您觀察到的 ID 結構抓取公司名稱
-            links = s.select('a[id*="lnkCompanyName"], a[id*="hlCompanyName"]')
-            return [{"公司名稱": l.get_text(strip=True)} for l in links if l.get_text(strip=True)]
-
-        all_companies.extend(extract_names(soup))
-
-        # 2. 模擬點擊 ctl02, ctl03, ctl04, ctl05
-        # 這裡 i 對應您看到的編號
-        for i in range(2, 6):
-            target = f'ctl00$ContentPlaceHolder1$Repeater1$ctl0{i}$lnkPage'
-            print(f"正在模擬點擊分頁按鈕：{target}...")
-
-            # 每次 PostBack 都要攜帶最新的隱藏欄位值
-            payload = {
-                "__EVENTTARGET": target,
-                "__EVENTARGUMENT": "",
-                "__VIEWSTATE": soup.find("input", {"name": "__VIEWSTATE"})["value"],
-                "__VIEWSTATEGENERATOR": soup.find("input", {"name": "__VIEWSTATEGENERATOR"})["value"],
-                "__EVENTVALIDATION": soup.find("input", {"name": "__EVENTVALIDATION"})["value"],
-            }
-
-            # 必須使用 POST 方法
-            res = session.post(url, headers=headers, data=payload)
-            soup = BeautifulSoup(res.text, 'html.parser')
+        # 這裡設定抓取前 5 頁
+        for p in range(1, 6):
+            print(f"目前正在處理第 {p} 頁...")
+            time.sleep(3) 
             
-            p_data = extract_names(soup)
-            if not p_data:
-                print(f"警告：在 {target} 未抓到資料。")
-                break
-                
-            all_companies.extend(p_data)
-            print(f"成功抓取分頁資料，累計 {len(all_companies)} 筆")
-            time.sleep(2)
+            # 抓取當前頁面的公司名稱
+            links = driver.find_elements(By.CSS_SELECTOR, 'a[id*="hlCompanyName"]')
+            for l in links:
+                name = l.text.strip()
+                if name: all_companies.append({"公司名稱": name})
+            
+            print(f"第 {p} 頁完成，目前累計 {len(all_companies)} 筆")
+
+            if p < 5:
+                # 根據您的觀察，ID 邏輯是 ctl02, ctl03...
+                btn_id = f"ctl00_ContentPlaceHolder1_Repeater1_ctl0{p+1}_lnkPage"
+                try:
+                    next_btn = wait.until(EC.element_to_be_clickable((By.ID, btn_id)))
+                    next_btn.click()
+                except:
+                    print(f"找不到按鈕 {btn_id}，可能已到末頁。")
+                    break
 
     except Exception as e:
-        print(f"執行出錯: {e}")
+        print(f"錯誤: {e}")
+    finally:
+        driver.quit()
 
-    # 儲存 CSV
     if all_companies:
         df = pd.DataFrame(all_companies).drop_duplicates()
         df.to_csv("teema_companies.csv", index=False, encoding="utf-8-sig")
-        print(f"🎉 任務完成！共存檔 {len(df)} 筆資料。")
+        print(f"🎉 成功抓取 {len(df)} 筆。")
 
 if __name__ == "__main__":
     scrape_teema()
