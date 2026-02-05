@@ -1,28 +1,58 @@
-name: Run Scraper
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
+import pandas as pd
+import time
 
-on:
-  workflow_dispatch: # 讓你可以手動點擊按鈕執行
+def scrape_teema():
+    # 設定 Headless Chrome (無頭模式，適合 GitHub 環境)
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+    all_companies = []
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: 檢出程式碼
-        uses: actions/checkout@v3
+    try:
+        url = "https://b2b.teema.org.tw/CompanyList.aspx"
+        driver.get(url)
+        wait = WebDriverWait(driver, 20)
 
-      - name: 設定 Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
+        # 抓取 1 到 4 頁 (對應 ctl02-ctl05)
+        for p in range(1, 5):
+            print(f"目前正在處理第 {p} 頁...")
+            time.sleep(3) # 等待資料載入
+            
+            # 抓取當前頁面的公司名稱
+            links = driver.find_elements(By.CSS_SELECTOR, 'a[id*="hlCompanyName"]')
+            for l in links:
+                name = l.text.strip()
+                if name: all_companies.append({"公司名稱": name})
+            
+            print(f"第 {p} 頁完成，目前累計 {len(all_companies)} 筆")
 
-      - name: 安裝套件
-        run: pip install -r requirements.txt
+            # 如果不是最後一頁，就點擊下一頁
+            if p < 4:
+                btn_id = f"ctl00_ContentPlaceHolder1_Repeater1_ctl0{p+1}_lnkPage"
+                print(f"嘗試點擊按鈕 ID: {btn_id}")
+                next_btn = wait.until(EC.element_to_be_clickable((By.ID, btn_id)))
+                next_btn.click()
+                time.sleep(2)
 
-      - name: 執行爬蟲
-        run: python scraper.py
+    except Exception as e:
+        print(f"爬取過程中發生錯誤: {e}")
+    finally:
+        driver.quit()
 
-      - name: 上傳結果
-        uses: actions/upload-artifact@v4
-        with:
-          name: scraper-results
-          path: teema_companies.csv
+    if all_companies:
+        df = pd.DataFrame(all_companies).drop_duplicates()
+        df.to_csv("teema_companies.csv", index=False, encoding="utf-8-sig")
+        print(f"🎉 成功！總共抓取 {len(df)} 筆公司資料。")
+
+if __name__ == "__main__":
+    scrape_teema()
